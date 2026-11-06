@@ -1,3 +1,5 @@
+<img src="icon.png" width="96" align="right">
+
 # 🎣 B站评论区捕鱼
 
 最近 B站评论区闹「鱼灾」——大量由 AI Agent 驱动、顶着鲸鱼娘头像、名字叫「XX的大肥鱼」的账号在评论区自动留言。

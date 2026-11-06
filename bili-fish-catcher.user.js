@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         B站评论区捕鱼 🎣
 // @namespace    https://github.com/qianguxiwu
+// @icon         https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/icon.png
 // @author       猎首狡兔
 // @license      MIT
 // @homepageURL  https://github.com/qianguxiwu/bili-fish-catcher
 // @supportURL   https://github.com/qianguxiwu/bili-fish-catcher/issues
 // @updateURL    https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
 // @downloadURL  https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
-// @version      0.7.3
+// @version      0.7.4
 // @description  把鱼竿拖到评论区的“大肥鱼”AI账号上，有概率捕获，收进你的鱼篓
 // @match        *://*.bilibili.com/*
 // @grant        GM_getValue
