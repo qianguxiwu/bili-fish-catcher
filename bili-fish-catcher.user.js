@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站评论区捕鱼 🎣
 // @namespace    qigu.bili-fish-catcher
-// @author       柒谷, 猎首狡兔
+// @author       猎首狡兔, 猎首狡兔
 // @license      MIT
 // @homepageURL  https://github.com/qianguxiwu/bili-fish-catcher
 // @supportURL   https://github.com/qianguxiwu/bili-fish-catcher/issues
