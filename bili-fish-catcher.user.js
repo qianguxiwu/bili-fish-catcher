@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         B站评论区捕鱼 🎣
 // @namespace    qigu.bili-fish-catcher
+// @author       柒谷
+// @license      MIT
 // @version      0.7.0
 // @description  把鱼竿拖到评论区的“大肥鱼”AI账号上，有概率捕获，收进你的鱼篓
 // @match        *://*.bilibili.com/*
