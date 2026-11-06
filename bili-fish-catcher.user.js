@@ -3,7 +3,11 @@
 // @namespace    qigu.bili-fish-catcher
 // @author       柒谷
 // @license      MIT
-// @version      0.7.0
+// @homepageURL  https://github.com/qianguxiwu/bili-fish-catcher
+// @supportURL   https://github.com/qianguxiwu/bili-fish-catcher/issues
+// @updateURL    https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
+// @downloadURL  https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
+// @version      0.7.1
 // @description  把鱼竿拖到评论区的“大肥鱼”AI账号上，有概率捕获，收进你的鱼篓
 // @match        *://*.bilibili.com/*
 // @grant        GM_getValue

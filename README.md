@@ -52,7 +52,7 @@
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。
 2. Chrome / Edge 用户：打开扩展管理页的「开发者模式」，并在 Tampermonkey 详情里打开「允许用户脚本」。
-3. 点击仓库里的 [`bili-fish-catcher.user.js`](./bili-fish-catcher.user.js) → Raw，Tampermonkey 会弹出安装页。
+3. 点击 [一键安装](https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js)，Tampermonkey 会弹出安装页。装好后会自动检查更新。
 
 ### 手机
 
