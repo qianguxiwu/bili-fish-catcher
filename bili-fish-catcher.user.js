@@ -8,7 +8,7 @@
 // @supportURL   https://github.com/qianguxiwu/bili-fish-catcher/issues
 // @updateURL    https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
 // @downloadURL  https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
-// @version      0.7.5
+// @version      0.8.0
 // @description  把鱼竿拖到评论区的“大肥鱼”AI账号上，有概率捕获，收进你的鱼篓
 // @match        *://*.bilibili.com/*
 // @grant        GM_getValue
@@ -99,7 +99,8 @@
       try { hasGM ? GM_setValue(k, v) : localStorage.setItem('fc_' + k, JSON.stringify(v)); } catch (e) {}
     },
   };
-  let bag = store.get('bag', []);          // [{uid,name,rarity,disguised,level,weight,time,url,avatar}]
+  let bag = store.get('bag', []);          // [{id,uid,ckey,name,rarity,disguised,level,weight,time,url,avatar}]
+  bag.forEach(f => { if (!f.id) f.id = f.time + ':' + f.uid; });
   let attempts = store.get('attempts', {}); // uid -> 脱钩次数
   let stats = store.get('stats', { casts: 0, caught: 0, escaped: 0 });
   const save = () => { store.set('bag', bag); store.set('attempts', attempts); store.set('stats', stats); };
@@ -301,7 +302,7 @@
     .panel ul { list-style: none; margin: 0; padding: 0 6px 6px; }
     .panel li { display: flex; justify-content: space-between; gap: 8px; padding: 7px 8px; border-radius: 8px; }
     .panel li:hover { background: #f6f7f8; }
-    .panel .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .panel .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .panel .r { flex: none; font-size: 12px; padding: 0 6px; border-radius: 6px; }
     .r.普通 { background: #f1f2f3; color: #61666d; }
     .r.优秀 { background: #e3f6e8; color: #1a9447; }
@@ -312,7 +313,12 @@
     .lv { color: #9499a0; font-size: 11px; margin-left: 4px; }
     .rarity-sum { padding: 0 14px 8px; display: flex; flex-wrap: wrap; gap: 4px; }
     .panel .empty { padding: 18px 14px; color: #9499a0; text-align: center; }
-    .panel footer { padding: 8px 14px 12px; display: flex; justify-content: flex-end; }
+    .panel footer { padding: 8px 14px 12px; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+    .panel footer .hint { margin-right: auto; color: #9499a0; font-size: 12px; }
+    .panel button:disabled { opacity: .45; cursor: default; }
+    .panel ul.releasing li { cursor: pointer; }
+    .panel li.sel { background: #e3f1ff; }
+    .panel .ck { flex: none; font-size: 15px; color: #00aeec; }
     .panel button { border: 0; background: #f1f2f3; border-radius: 6px; padding: 5px 10px; cursor: pointer; font: inherit; }
     .panel button.danger { background: #ffe3e8; color: #e0244f; }
     .fly { position: fixed; font-size: 28px; pointer-events: none; z-index: 2147483647; }
@@ -375,7 +381,8 @@
     return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
 
-  let clearArmed = false;
+  let releaseMode = false;          // 放生模式
+  const releaseSel = new Set();     // 选中的鱼 id
   let panelBox = null; // 'report' | 'paste' | null
   function renderPanel() {
     const list = bag.slice().reverse();
@@ -387,8 +394,9 @@
         const n = bag.filter(f => f.rarity === r.name).length;
         return n ? `<span class="r ${r.name}">${r.name} ×${n}</span>` : '';
       }).join('')}</div>` : ''}
-      ${list.length ? `<ul>${list.map(f => `
-        <li title="${escapeHtml(new Date(f.time).toLocaleString())}">
+      ${list.length ? `<ul class="${releaseMode ? 'releasing' : ''}">${list.map(f => `
+        <li data-id="${escapeHtml(f.id)}" class="${releaseSel.has(f.id) ? 'sel' : ''}" title="${escapeHtml(new Date(f.time).toLocaleString())}">
+          ${releaseMode ? `<span class="ck">${releaseSel.has(f.id) ? '☑' : '☐'}</span>` : ''}
           <span class="nm">${f.disguised ? '🎭' : '🐟'} ${escapeHtml(f.name)}${f.level != null ? `<span class="lv">LV${f.level}</span>` : ''}</span>
           <span class="r ${escapeHtml(f.rarity)}">${escapeHtml(f.rarity)}${f.species ? ' · ' + escapeHtml(f.species) : ''} · ${f.weight}${f.unit || '斤'}</span>
         </li>`).join('')}</ul>` : `<div class="empty">还没有鱼，去评论区下竿吧</div>`}
@@ -406,7 +414,12 @@
         <div class="row"><button class="primary" data-act="duel">开战</button></div>
       </div>` : ''}
       <div class="stats" style="padding-top:0">对决战绩：${stats.duelWin || 0} 胜 ${stats.duelLose || 0} 负 ${stats.duelDraw || 0} 平 · 我的渔获分 ${myStats().score}</div>
-      <footer><button class="${clearArmed ? 'danger' : ''}" data-act="clear">${clearArmed ? '再点一次确认清空' : '清空鱼篓'}</button></footer>`;
+      <footer>${releaseMode ? `
+        <span class="hint">点鱼选择，已选 ${releaseSel.size} 条</span>
+        <button data-act="rel-all">${releaseSel.size === bag.length && bag.length ? '全不选' : '全选'}</button>
+        <button data-act="rel-cancel">取消</button>
+        <button class="primary" data-act="rel-go" ${releaseSel.size ? '' : 'disabled'}>放生</button>`
+        : `<button data-act="release" ${bag.length ? '' : 'disabled'}>🐋 放生鲸鲸</button>`}</footer>`;
   }
   // 防止在粘贴框里打字时触发 B站 的快捷键（空格暂停等）
   ['keydown', 'keyup', 'keypress'].forEach(t => panel.addEventListener(t, e => e.stopPropagation()));
@@ -430,11 +443,33 @@
       startDuel(opp);
       return;
     }
-    if (act === 'clear') {
-      if (!clearArmed) { clearArmed = true; renderPanel(); setTimeout(() => { clearArmed = false; if (panel.classList.contains('open')) renderPanel(); }, 3000); return; }
-      bag = []; attempts = {}; stats = { casts: 0, caught: 0, escaped: 0 }; clearArmed = false;
-      save(); updateBadge(); renderPanel(); toast('鱼篓已清空');
+    if (act === 'release') { releaseMode = true; releaseSel.clear(); panelBox = null; renderPanel(); return; }
+    if (act === 'rel-cancel') { releaseMode = false; releaseSel.clear(); renderPanel(); return; }
+    if (act === 'rel-all') {
+      if (releaseSel.size === bag.length) releaseSel.clear(); else bag.forEach(f => releaseSel.add(f.id));
+      renderPanel(); return;
     }
+    if (act === 'rel-go') {
+      const freed = bag.filter(f => releaseSel.has(f.id));
+      if (!freed.length) return;
+      bag = bag.filter(f => !releaseSel.has(f.id));
+      freed.forEach(f => delete attempts[f.uid]);
+      stats.released = (stats.released || 0) + freed.length;
+      save(); updateBadge();
+      releaseMode = false; releaseSel.clear();
+      renderPanel();
+      scanComments(); // 让被放生的评论立刻回到评论区
+      toast(freed.length === 1 ? `🌊 放生了「${freed[0].name}」，它游回评论区了` : `🌊 放生了 ${freed.length} 条鲸鲸，它们游回评论区了`);
+    }
+  });
+  // 放生模式下点一行 = 选中/取消
+  panel.addEventListener('click', e => {
+    if (!releaseMode || e.target.closest('button')) return;
+    const li = e.target.closest('li[data-id]');
+    if (!li) return;
+    const id = li.dataset.id;
+    if (releaseSel.has(id)) releaseSel.delete(id); else releaseSel.add(id);
+    renderPanel();
   });
 
   /* ============ 拖拽 ============ */
@@ -767,13 +802,14 @@
       if (bait) stats.baited = (stats.baited || 0) + 1;
       const weight = rand(rar.tons[0], rar.tons[1]).toFixed(1);
       const disguised = cls.type !== 'name';
-      bag.push({ uid: info.uid, name: info.name, rarity: rar.name, species: rar.species, unit: '吨', disguised, level: info.level, weight, time: now, url: location.href, avatar: info.avatar });
+      const ckey = commentKey(c);
+      bag.push({ id: now + ':' + info.uid, uid: info.uid, ckey, name: info.name, rarity: rar.name, species: rar.species, unit: '吨', disguised, level: info.level, weight, time: now, url: location.href, avatar: info.avatar });
       delete attempts[info.uid];
       stats.caught++;
       save(); updateBadge();
       flyFish(x, y, rar.name);
       toast(`${bait ? '🪱 咬饵上钩！' : '🎉 '}${rar.tag}捕获「${info.name}」${disguised ? '（识破伪装）' : ''}——${rar.species}级，${weight} 吨！`);
-      if (CONFIG.replaceCaughtComment) setTimeout(() => markCaught(c, info.name), 450);
+      if (CONFIG.replaceCaughtComment && ckey) setTimeout(() => hideComment(c.el, ckey, info.name), 450);
     } else {
       attempts[info.uid] = (attempts[info.uid] || 0) + 1;
       stats.escaped++;
@@ -804,14 +840,85 @@
     anim.onfinish = () => f.remove();
   }
 
-  function markCaught(c, name) {
+  /* ============ 已捕获评论：折叠并在刷新后保持 ============ */
+  // 每条评论的唯一标识：优先用 B站 的评论 id（rpid），拿不到时用“用户 + 内容指纹”
+  const keyCache = new WeakMap();
+  function commentKey(c) {
     const el = c.el;
-    const note = document.createElement('div');
-    note.textContent = `🎣 这里的「${name}」已被你捕获`;
-    note.style.cssText = 'margin:8px 0;padding:8px 12px;border-radius:8px;background:#f6f7f8;color:#9499a0;font-size:13px;';
-    try { el.before(note); } catch (e) {}
+    if (c.kind === 'wc') {
+      const d = el.data || el.__data;
+      const rp = d && (d.rpid_str || d.rpid);
+      if (rp) return 'r' + rp;
+    } else {
+      const rp = el.getAttribute('data-rpid') || el.getAttribute('data-id') ||
+        (el.querySelector('[data-root-reply-id]') || {}).getAttribute?.('data-root-reply-id');
+      if (rp) return 'r' + rp;
+    }
+    const cached = keyCache.get(el);
+    if (cached) return cached;
+    const info = extractInfo(c);
+    if (!info.name || !info.content.trim()) return null;
+    const key = 'u' + info.uid + '|' + fnv(info.content.trim().slice(0, 120));
+    keyCache.set(el, key);
+    return key;
+  }
+
+  function noteOf(el) {
+    const prev = el.previousElementSibling;
+    return prev && prev.classList && prev.classList.contains('fc-caught-note') ? prev : null;
+  }
+
+  function hideComment(el, key, name) {
+    let note = noteOf(el);
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'fc-caught-note';
+      note.style.cssText = 'margin:8px 0;padding:8px 12px;border-radius:8px;background:#f6f7f8;color:#9499a0;font-size:13px;';
+      try { el.before(note); } catch (e) { note = null; }
+    }
+    if (note) note.textContent = `🎣 此处的「${name}」已被捕获`;
+    el.setAttribute('data-fc-caught', key);
     el.style.display = 'none';
   }
+
+  function showComment(el) {
+    const note = noteOf(el);
+    if (note) note.remove();
+    el.removeAttribute('data-fc-caught');
+    el.style.display = '';
+  }
+
+  function allCommentEls() {
+    const out = [];
+    for (const root of document.querySelectorAll('bili-comments')) {
+      deepQueryAll(root, 'bili-comment-renderer, bili-comment-reply-renderer').forEach(el => out.push({ el, kind: 'wc' }));
+    }
+    document.querySelectorAll('.reply-item, .sub-reply-item').forEach(el => out.push({ el, kind: 'old' }));
+    return out;
+  }
+
+  let scanning = false;
+  function scanComments() {
+    if (scanning || !CONFIG.replaceCaughtComment) return;
+    scanning = true;
+    try {
+      const caught = new Map();
+      for (const f of bag) if (f.ckey) caught.set(f.ckey, f.name);
+      for (const c of allCommentEls()) {
+        const marked = c.el.getAttribute('data-fc-caught');
+        if (!caught.size && !marked) continue;
+        const key = commentKey(c);
+        if (key && caught.has(key)) {
+          if (marked !== key || c.el.style.display !== 'none' || !noteOf(c.el)) hideComment(c.el, key, caught.get(key));
+        } else if (marked) {
+          showComment(c.el);
+        }
+      }
+    } catch (e) { /* 页面结构变化时静默跳过 */ }
+    scanning = false;
+  }
+  // 评论区是懒加载的，定时补扫一遍
+  setInterval(scanComments, 1500);
 
   /* ============ 只在有评论区的页面显示鱼竿 ============ */
   function hasComments() {
