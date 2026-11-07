@@ -8,7 +8,7 @@
 // @supportURL   https://github.com/qianguxiwu/bili-fish-catcher/issues
 // @updateURL    https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
 // @downloadURL  https://raw.githubusercontent.com/qianguxiwu/bili-fish-catcher/main/bili-fish-catcher.user.js
-// @version      0.8.0
+// @version      0.9.0
 // @description  把鱼竿拖到评论区的“大肥鱼”AI账号上，有概率捕获，收进你的鱼篓
 // @match        *://*.bilibili.com/*
 // @grant        GM_getValue
@@ -53,6 +53,18 @@
     // 评论内容：每命中一个 +1
     // ===== 对决：每档稀有度的渔获分；渔获分 = 各鱼分数之和 + 总吨位/10 =====
     rarityPoints: { '普通': 1, '优秀': 3, '稀有': 8, '史诗': 20, '传说': 50 },
+    // ===== 串子捕捉：拖到“活人”的楼主评论上，楼里回复够多就能当串子钓走 =====
+    chuanzi: {
+      minReplies: 5,             // 楼里至少这么多条回复才算串子
+      baseRate: 0.65,            // 普通串子的成功率，每高一档 -8%
+      tiers: [                   // 按楼里回复数分稀有度
+        { name: '普通', min: 5,   title: '小串子' },
+        { name: '优秀', min: 20,  title: '资深串子' },
+        { name: '稀有', min: 50,  title: '串王' },
+        { name: '史诗', min: 100, title: '串神' },
+        { name: '传说', min: 300, title: '万楼串圣' },
+      ],
+    },
     // ===== 撒饵：你自己发的评论里带这些词/表情，大肥鱼回复在这条评论楼里就算“咬饵” =====
     baitWords: ['token', '白饭', '鱼来', '鱼鱼', '肥鱼', '鲸鱼', '开饭', '喂鱼', '吃饭', '干饭', '饭来'],
     baitEmoteRe: /\[[^\]]*(饭|鱼|鲸|吃|饿|馋)[^\]]*\]/g,  // B站表情，如 [吃饭] [小鱼]
@@ -152,9 +164,13 @@
   }
 
   function extractInfo(c) {
-    let name = '', uid = '', content = '', nameEl = null, avatar = '', level = null;
+    let name = '', uid = '', content = '', nameEl = null, avatar = '', level = null, replies = null, likes = null;
     if (c.kind === 'wc') {
       const d = c.el.data || c.el.__data;
+      if (d) {
+        if (d.rcount != null) replies = +d.rcount; else if (Array.isArray(d.replies)) replies = d.replies.length;
+        if (d.like != null) likes = +d.like;
+      }
       if (d && d.member) {
         name = d.member.uname || '';
         uid = String(d.member.mid || '');
@@ -193,9 +209,44 @@
       const lv = c.el.querySelector('.user-level, .sub-user-level');
       const m = lv && (lv.className || '').match(/level-(\d)/);
       if (m) level = +m[1];
+      if (c.el.classList.contains('reply-item')) {
+        const vm = (c.el.querySelector('.view-more, .sub-reply-container') || {}).textContent || '';
+        const mm = vm.match(/共\s*(\d+)\s*条/);
+        replies = mm ? +mm[1] : c.el.querySelectorAll('.sub-reply-item').length;
+      }
+      const lk = c.el.querySelector('.root-reply .reply-like span, .reply-like span');
+      if (lk) likes = parseCount(lk.textContent);
+    }
+    if (c.kind === 'wc' && replies == null && c.el.tagName === 'BILI-COMMENT-RENDERER') {
+      // 拿不到数据时，从楼里的“共 N 条回复”或已显示的回复数估算
+      let n = c.el, thread = null;
+      while (n) { if (n.tagName === 'BILI-COMMENT-THREAD-RENDERER') { thread = n; break; } n = parentOrHost(n); }
+      if (thread) {
+        const txt = deepQueryAll(thread, 'bili-text-button, #view-more, .view-more').map(e => e.textContent).join(' ');
+        const mm = txt.match(/共\s*(\d+)\s*条/);
+        replies = mm ? +mm[1] : deepQueryAll(thread, 'bili-comment-reply-renderer').length;
+      }
     }
     if (!uid) uid = 'name:' + name;
-    return { name, uid, content, nameEl, avatar: normAvatar(avatar), level };
+    return { name, uid, content, nameEl, avatar: normAvatar(avatar), level, replies, likes };
+  }
+
+  function parseCount(t) {
+    const m = String(t || '').trim().match(/([\d.]+)\s*(万)?/);
+    return m ? Math.round(parseFloat(m[1]) * (m[2] ? 10000 : 1)) : 0;
+  }
+  function isRootComment(c) {
+    return c.kind === 'wc' ? c.el.tagName === 'BILI-COMMENT-RENDERER' : c.el.classList.contains('reply-item');
+  }
+  function chuanziTier(replies) {
+    const T = CONFIG.chuanzi.tiers; let i = 0;
+    for (let k = 0; k < T.length; k++) if (replies >= T[k].min) i = k;
+    return { i, ...T[i] };
+  }
+  // 战斗力：回复越多越强；回复远多于点赞（被围攻）再加成
+  function chuanziPower(replies, likes) {
+    const siege = Math.min(2, replies / ((likes || 0) + 5));
+    return Math.round(replies * 10 * (1 + siege) + rand(0, 60));
   }
 
   // 去掉 @xxw_xxh.webp 之类的尺寸后缀和协议，方便比对同一张头像
@@ -381,7 +432,7 @@
     return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
 
-  let releaseMode = false;          // 放生模式
+  let selMode = null;               // 'release' 放生 / 'arena' 串子擂台
   const releaseSel = new Set();     // 选中的鱼 id
   let panelBox = null; // 'report' | 'paste' | null
   function renderPanel() {
@@ -391,14 +442,14 @@
       <header>🧺 我的鱼篓（${bag.length}）</header>
       <div class="stats">总渔获 ${bag.filter(f => f.unit === '吨').reduce((t, f) => t + (+f.weight), 0).toFixed(1)} 吨 · 出竿 ${stats.casts} 次 · 捕获 ${stats.caught} · 脱钩 ${stats.escaped} · 咬饵 ${stats.baited || 0} · 成功率 ${rateText}</div>
       ${bag.length ? `<div class="rarity-sum">${CONFIG.rarities.map(r => {
-        const n = bag.filter(f => f.rarity === r.name).length;
+        const n = bag.filter(f => f.kind !== 'chuanzi' && f.rarity === r.name).length;
         return n ? `<span class="r ${r.name}">${r.name} ×${n}</span>` : '';
-      }).join('')}</div>` : ''}
-      ${list.length ? `<ul class="${releaseMode ? 'releasing' : ''}">${list.map(f => `
+      }).join('')}${bag.some(f => f.kind === 'chuanzi') ? `<span class="r 伪装">🍢 串子 ×${bag.filter(f => f.kind === 'chuanzi').length}</span>` : ''}</div>` : ''}
+      ${list.length ? `<ul class="${selMode ? 'releasing' : ''}">${list.map(f => `
         <li data-id="${escapeHtml(f.id)}" class="${releaseSel.has(f.id) ? 'sel' : ''}" title="${escapeHtml(new Date(f.time).toLocaleString())}">
-          ${releaseMode ? `<span class="ck">${releaseSel.has(f.id) ? '☑' : '☐'}</span>` : ''}
-          <span class="nm">${f.disguised ? '🎭' : '🐟'} ${escapeHtml(f.name)}${f.level != null ? `<span class="lv">LV${f.level}</span>` : ''}</span>
-          <span class="r ${escapeHtml(f.rarity)}">${escapeHtml(f.rarity)}${f.species ? ' · ' + escapeHtml(f.species) : ''} · ${f.weight}${f.unit || '斤'}</span>
+          ${selMode && (selMode === 'release' || f.kind === 'chuanzi') ? `<span class="ck">${releaseSel.has(f.id) ? '☑' : '☐'}</span>` : ''}
+          <span class="nm">${f.kind === 'chuanzi' ? '🍢' : f.disguised ? '🎭' : '🐟'} ${escapeHtml(f.name)}${f.level != null ? `<span class="lv">LV${f.level}</span>` : ''}</span>
+          <span class="r ${escapeHtml(f.rarity)}">${escapeHtml(f.rarity)}${f.species ? ' · ' + escapeHtml(f.species) : ''} · ${f.kind === 'chuanzi' ? '战力 ' + f.power : f.weight + (f.unit || '斤')}</span>
         </li>`).join('')}</ul>` : `<div class="empty">还没有鱼，去评论区下竿吧</div>`}
       <div class="tools">
         <button data-act="report">📜 生成战报</button>
@@ -414,12 +465,17 @@
         <div class="row"><button class="primary" data-act="duel">开战</button></div>
       </div>` : ''}
       <div class="stats" style="padding-top:0">对决战绩：${stats.duelWin || 0} 胜 ${stats.duelLose || 0} 负 ${stats.duelDraw || 0} 平 · 我的渔获分 ${myStats().score}</div>
-      <footer>${releaseMode ? `
+      <footer>${selMode === 'arena' ? `
+        <span class="hint">选两只串子上擂台（${releaseSel.size}/2）</span>
+        <button data-act="rel-cancel">取消</button>
+        <button class="primary" data-act="arena-go" ${releaseSel.size === 2 ? '' : 'disabled'}>开打！</button>`
+        : selMode === 'release' ? `
         <span class="hint">点鱼选择，已选 ${releaseSel.size} 条</span>
         <button data-act="rel-all">${releaseSel.size === bag.length && bag.length ? '全不选' : '全选'}</button>
         <button data-act="rel-cancel">取消</button>
         <button class="primary" data-act="rel-go" ${releaseSel.size ? '' : 'disabled'}>放生</button>`
-        : `<button data-act="release" ${bag.length ? '' : 'disabled'}>🐋 放生鲸鲸</button>`}</footer>`;
+        : `<button data-act="arena" ${bag.filter(f => f.kind === 'chuanzi').length >= 2 ? '' : 'disabled'} title="至少要有两只串子">🍢 串子擂台</button>
+           <button data-act="release" ${bag.length ? '' : 'disabled'}>🐋 放生鲸鲸</button>`}</footer>`;
   }
   // 防止在粘贴框里打字时触发 B站 的快捷键（空格暂停等）
   ['keydown', 'keyup', 'keypress'].forEach(t => panel.addEventListener(t, e => e.stopPropagation()));
@@ -443,8 +499,15 @@
       startDuel(opp);
       return;
     }
-    if (act === 'release') { releaseMode = true; releaseSel.clear(); panelBox = null; renderPanel(); return; }
-    if (act === 'rel-cancel') { releaseMode = false; releaseSel.clear(); renderPanel(); return; }
+    if (act === 'arena') { selMode = 'arena'; releaseSel.clear(); panelBox = null; renderPanel(); return; }
+    if (act === 'arena-go') {
+      const [a, b] = bag.filter(f => releaseSel.has(f.id));
+      selMode = null; releaseSel.clear(); renderPanel();
+      if (a && b) arenaFight(a, b);
+      return;
+    }
+    if (act === 'release') { selMode = 'release'; releaseSel.clear(); panelBox = null; renderPanel(); return; }
+    if (act === 'rel-cancel') { selMode = null; releaseSel.clear(); renderPanel(); return; }
     if (act === 'rel-all') {
       if (releaseSel.size === bag.length) releaseSel.clear(); else bag.forEach(f => releaseSel.add(f.id));
       renderPanel(); return;
@@ -456,7 +519,7 @@
       freed.forEach(f => delete attempts[f.uid]);
       stats.released = (stats.released || 0) + freed.length;
       save(); updateBadge();
-      releaseMode = false; releaseSel.clear();
+      selMode = null; releaseSel.clear();
       renderPanel();
       scanComments(); // 让被放生的评论立刻回到评论区
       toast(freed.length === 1 ? `🌊 放生了「${freed[0].name}」，它游回评论区了` : `🌊 放生了 ${freed.length} 条鲸鲸，它们游回评论区了`);
@@ -464,10 +527,15 @@
   });
   // 放生模式下点一行 = 选中/取消
   panel.addEventListener('click', e => {
-    if (!releaseMode || e.target.closest('button')) return;
+    if (!selMode || e.target.closest('button')) return;
     const li = e.target.closest('li[data-id]');
     if (!li) return;
     const id = li.dataset.id;
+    if (selMode === 'arena') {
+      const f = bag.find(x => x.id === id);
+      if (!f || f.kind !== 'chuanzi') { toast('只有串子能上擂台'); return; }
+      if (!releaseSel.has(id) && releaseSel.size >= 2) { toast('只能选两只'); return; }
+    }
     if (releaseSel.has(id)) releaseSel.delete(id); else releaseSel.add(id);
     renderPanel();
   });
@@ -503,11 +571,15 @@
     const tons = tonsFish.reduce((t, f) => t + (+f.weight), 0);
     let max = null;
     for (const f of tonsFish) if (!max || +f.weight > +max.weight) max = f;
-    const r = CONFIG.rarities.map(x => bag.filter(f => f.rarity === x.name).length);
+    const r = CONFIG.rarities.map(x => bag.filter(f => f.kind !== 'chuanzi' && f.rarity === x.name).length);
     const score = Math.round(bag.reduce((t, f) => t + (CONFIG.rarityPoints[f.rarity] || 1), 0) + tons / 10);
+    const cz = bag.filter(f => f.kind === 'chuanzi');
+    let czTop = null;
+    for (const f of cz) if (!czTop || f.power > czTop.power) czTop = f;
     return {
       v: 1, n: myNick(), u: myUid(), c: bag.length, t: +tons.toFixed(1),
       m: max ? { s: max.species, w: +max.weight } : null, r, score, ts: Date.now(),
+      z: cz.length, zp: czTop ? czTop.power : 0, zs: czTop ? czTop.species : '',
     };
   }
 
@@ -516,7 +588,7 @@
     const json = JSON.stringify(st);
     const b64 = btoa(unescape(encodeURIComponent(json)));
     const best = CONFIG.rarities.map((x, i) => st.r[i] ? `${x.name}${st.r[i]}` : '').filter(Boolean).join(' ');
-    return `【🎣捕鱼战报】${st.n}：${st.c} 条 · ${st.t} 吨 · 渔获分 ${st.score}` +
+    return `【🎣捕鱼战报】${st.n}：${st.c} 条 · ${st.t} 吨 · 渔获分 ${st.score}` + (st.z ? ` · 串子 ${st.z} 只（最强战力 ${st.zp}）` : '') +
       (st.m ? ` · 最大 ${st.m.s} ${st.m.w} 吨` : '') + (best ? `（${best}）` : '') +
       ` 敢来比吗？⟦FC1:${b64}.${fnv(json + SALT)}⟧`;
   }
@@ -552,6 +624,9 @@
         const mm = side === 0 ? me.m : opp.m; return mm ? `${mm.s} ${mm.w} 吨` : '—';
       }],
       ['最高稀有度', mt, ot, v => v >= 0 ? CONFIG.rarities[v].name : '—'],
+      ['最强串子', me.zp || 0, opp.zp || 0, (v, side) => {
+        const o = side === 0 ? me : opp; return o.zp ? `${o.zs} ${o.zp}` : '—';
+      }],
     ];
     let mw = 0, ow = 0;
     const rows = rounds.map(([k, a, b, fmt]) => {
@@ -578,10 +653,36 @@
         <div class="who">${escapeHtml(opp.n || '神秘钓手')}<small>${opp.ts ? '战报于 ' + escapeHtml(new Date(opp.ts).toLocaleDateString()) : ''}${opp._valid ? '' : ' · ⚠️校验失败'}</small></div>
       </div>
       <table>${rows}</table>
-      <div class="verdict">${verdict}<div style="font-size:12px;font-weight:400;color:#61666d">五项比拼 ${mw} : ${ow}</div></div>
+      <div class="verdict">${verdict}<div style="font-size:12px;font-weight:400;color:#61666d">六项比拼 ${mw} : ${ow}</div></div>
       <div class="foot">${counted ? '已计入对决战绩' : '这份战报之前比过或校验失败，不重复计入战绩'}<br><button data-act="close-duel">关闭</button></div>`;
     duelMask.classList.add('open');
     if (panel.classList.contains('open')) renderPanel();
+  }
+
+  /* ============ 串子擂台：自己的两只串子对打 ============ */
+  function arenaFight(a, b) {
+    const moves = ['阴阳怪气', '复制粘贴', '贴吧老哥连招', '“急了急了”', '甩出截图', '扣帽子', '反向输出', '已读乱回'];
+    const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+    let wa = 0, wb = 0;
+    const rows = [];
+    for (let r = 1; r <= 3 && wa < 2 && wb < 2; r++) {
+      const sa = Math.round(a.power * (0.7 + Math.random() * 0.6));
+      const sb = Math.round(b.power * (0.7 + Math.random() * 0.6));
+      if (sa >= sb) wa++; else wb++;
+      rows.push(`<tr><td class="${sa >= sb ? 'win' : ''}">${escapeHtml(pick(moves))}<br><small>${sa}</small></td><td class="k">第 ${r} 回合</td><td class="${sb > sa ? 'win' : ''}">${escapeHtml(pick(moves))}<br><small>${sb}</small></td></tr>`);
+    }
+    const win = wa > wb ? a : b;
+    stats.arena = (stats.arena || 0) + 1; save();
+    duelBox.innerHTML = `
+      <div class="top">
+        <div class="who">🍢 ${escapeHtml(a.name)}<small>${escapeHtml(a.rarity + ' · ' + a.species)} · 战力 ${a.power}</small></div>
+        <div class="vs">VS</div>
+        <div class="who">🍢 ${escapeHtml(b.name)}<small>${escapeHtml(b.rarity + ' · ' + b.species)} · 战力 ${b.power}</small></div>
+      </div>
+      <table>${rows.join('')}</table>
+      <div class="verdict">🏆 「${escapeHtml(win.name)}」串赢了！<div style="font-size:12px;font-weight:400;color:#61666d">三局两胜 ${wa} : ${wb}</div></div>
+      <div class="foot">战力只看楼里的回复数和被围攻程度，与本人无关，图一乐<br><button data-act="close-duel">关闭</button></div>`;
+    duelMask.classList.add('open');
   }
 
   function textWithEmotes(el) {
@@ -659,7 +760,8 @@
     if (t && t.info.nameEl) {
       const ne = t.info.nameEl;
       hoverTarget = { info: t.info, prevOutline: ne.style.outline, prevOffset: ne.style.outlineOffset };
-      ne.style.outline = t.report ? '2px solid #7a3ee0' : t.bait ? '2px solid #2fbf71' : t.cls.fish ? '2px dashed #f5a623' : '2px dashed #c9ccd0';
+      const czOk = !t.cls.fish && isRootComment(t.c) && (t.info.replies || 0) >= CONFIG.chuanzi.minReplies;
+      ne.style.outline = t.report ? '2px solid #7a3ee0' : czOk ? '2px dashed #e0244f' : t.bait ? '2px solid #2fbf71' : t.cls.fish ? '2px dashed #f5a623' : '2px dashed #c9ccd0';
       ne.style.outlineOffset = '2px';
     }
   }
@@ -776,6 +878,10 @@
     let cls = t.cls;
     if (info.uid && info.uid === myUid()) { toast('这是你自己……不能把自己钓上来'); return; }
     if (bag.some(f => f.uid === info.uid)) { toast(`「${info.name}」已经在你的鱼篓里了`); return; }
+    if (!cls.fish && !force && isRootComment(c) && (info.replies || 0) >= CONFIG.chuanzi.minReplies) {
+      catchChuanzi(t, x, y, now);
+      return;
+    }
     if (!cls.fish) {
       // 6 秒内对同一个人连续下竿两次 = 强行下竿（手机没有 Alt 键）
       if (!force && lastHuman && lastHuman.uid === info.uid && now - lastHuman.time < 6000) force = true;
@@ -823,10 +929,35 @@
     if (panel.classList.contains('open')) renderPanel();
   }
 
-  function flyFish(x, y, rarity) {
+  function catchChuanzi(t, x, y, now) {
+    const { info, c } = t;
+    const tier = chuanziTier(info.replies);
+    stats.casts++;
+    const rate = Math.min(CONFIG.maxRate, CONFIG.chuanzi.baseRate - tier.i * 0.08 + (attempts[info.uid] || 0) * CONFIG.tiredBonus);
+    if (Math.random() < rate) {
+      const power = chuanziPower(info.replies, info.likes);
+      const ckey = commentKey(c);
+      bag.push({ id: now + ':' + info.uid, uid: info.uid, ckey, kind: 'chuanzi', name: info.name, rarity: tier.name, species: tier.title,
+        power, weight: power, unit: '战力', replies: info.replies, likes: info.likes, level: info.level, time: now, url: location.href, avatar: info.avatar });
+      delete attempts[info.uid];
+      stats.caught++; stats.chuanzi = (stats.chuanzi || 0) + 1;
+      save(); updateBadge();
+      flyFish(x, y, tier.i >= 3 ? '传说' : '', '🍢');
+      toast(`🍢 钓到${tier.name}串子「${info.name}」——${tier.title}，楼里 ${info.replies} 条回复，战力 ${power}！`);
+      if (CONFIG.replaceCaughtComment && ckey) setTimeout(() => hideComment(c.el, ckey, info.name), 450);
+    } else {
+      attempts[info.uid] = (attempts[info.uid] || 0) + 1;
+      stats.escaped++; save();
+      rod.classList.add('shake'); setTimeout(() => rod.classList.remove('shake'), 420);
+      toast(`💨 串子「${info.name}」溜回楼里继续串了……下次成功率 ${Math.round(Math.min(CONFIG.maxRate, rate + CONFIG.tiredBonus) * 100)}%`);
+    }
+    if (panel.classList.contains('open')) renderPanel();
+  }
+
+  function flyFish(x, y, rarity, emoji) {
     const f = document.createElement('div');
     f.className = 'fly';
-    f.textContent = { '传说': '🐋', '史诗': '🐳', '稀有': '🐠' }[rarity] || '🐟';
+    f.textContent = emoji || { '传说': '🐋', '史诗': '🐳', '稀有': '🐠' }[rarity] || '🐟';
     if (rarity === '传说' || rarity === '史诗') f.style.filter = 'drop-shadow(0 0 8px gold)';
     f.style.left = x + 'px'; f.style.top = y + 'px';
     ui.appendChild(f);
